@@ -1,0 +1,55 @@
+name: Auto-merge
+
+# Turns on GitHub's auto-merge for a pull request once a maintainer adds the
+# "auto-merge" label. GitHub then squash-merges it by itself as soon as the
+# required checks pass and it is conflict-free -- and never before.
+#
+# The label is deliberate: CI can check formatting, links, licenses and forks,
+# but only a human can judge the eligibility criteria in CONTRIBUTING.md.
+
+on:
+  pull_request_target:
+    types: [labeled, unlabeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: auto-merge
+    if: github.event.label.name == 'auto-merge'
+    runs-on: ubuntu-latest
+    env:
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Turn auto-merge off
+        if: github.event.action == 'unlabeled'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge "$PR" --repo "${{ github.repository }}" --disable-auto
+        continue-on-error: true
+
+      # A labelled pull request may only touch the directory itself. Anything
+      # that changes the workflows or the tooling gets merged by hand.
+      - name: Check what the pull request changes
+        if: github.event.action == 'labeled'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          files=$(gh api "repos/${{ github.repository }}/pulls/${PR}/files" \
+            --paginate --jq '.[].filename')
+          echo "Changed files:"; echo "$files"
+          unexpected=$(echo "$files" | grep -v '^README\.md$' || true)
+          if [ -n "$unexpected" ]; then
+            echo "::error::This pull request changes more than README.md, so it will not auto-merge. Review and merge it by hand."
+            exit 1
+          fi
+
+      - name: Turn auto-merge on
+        if: github.event.action == 'labeled'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge "$PR" --repo "${{ github.repository }}" --auto --squash
+          echo "::notice::Auto-merge is on. This will squash-merge as soon as the checks pass."
